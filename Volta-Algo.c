@@ -9,7 +9,7 @@
 int process_image(const char* file) {
     // setup parameters
     int isGRAYSCALE = 1;
-    int minWidth = 256, minHeight = 256;
+    int minWidth = 128, minHeight = 128;
     int boxblurRad = 1; // radius of the box blur, 1 is a 3x3 box, 2 is a 5x5 box, and so on.
 
     // image pointers
@@ -24,9 +24,7 @@ int process_image(const char* file) {
     int y_margin = (height * (1 - PinHoleSize)) / 2;
     // --
 
-    // constant lookups for distance so the forloops don't have to divide every time.
-    int width_middle = width / 2;
-    int height_middle = height / 2;
+    double areaRatio = (double)(width * height) / (double)(minWidth * minHeight);
 
     // sanity check
     if (img == NULL || width <= minWidth || height <= minHeight) {
@@ -37,32 +35,70 @@ int process_image(const char* file) {
     // setup base variables
     int totalPixels = width * height;
 
+    // constant lookups for distance so the forloops don't have to divide every time.
+    int width_middle = width / 2;
+    int height_middle = height / 2;
+    int y_padding = y_margin + boxblurRad;
+    int x_padding = x_margin + boxblurRad;
+    int y_limit = height - y_margin - boxblurRad;
+    int x_limit = width - x_margin - boxblurRad;
+
     // the brightest nxn pixel in the image
-    int ImageScore = -67;
+    double ImageScore = -67;
+    double realcontrastScore = -67;
 
-    for (int y = y_margin + boxblurRad; y < (height - y_margin - boxblurRad); y++) {
-        for (int x = x_margin + boxblurRad; x < (width - x_margin - boxblurRad); x++) {
+    double globalBrightness = 0;
+    for (int i = 0; i < totalPixels; i++) {
+        globalBrightness += img[i];
+    }
+    double globalBrightnessAverage = globalBrightness / (double)totalPixels;
 
-            int boxblurBrightness = 0;                                      // Creates the box blur matrix, then sums all of the pixels in this grid.
-            for (int dy = -boxblurRad; dy <= boxblurRad; dy++) {            // [-1, 0, 1 ] [ -1 ]       example of a 3x3 grid centered around (x, y) 
-                for (int dx = -boxblurRad; dx <= boxblurRad; dx++) {        //             [  0 ]       with dy = -1, 0, 1 and dx = -1, 0, 1 .
-                    boxblurBrightness += img[(y + dy) * width + (x + dx)];  //             [  1 ]
-                }                                                           // No need to worry about rgb channels because of the isGRAYSCALE flag. 
+    for (int y = y_padding; y < y_limit; y++) {
+        for (int x = x_padding; x < x_limit; x++) {
+
+            int boxblurBrightness = 0;
+
+            int brightPixels = 0;
+            int darkPixels = 255;
+                                                                            
+            for (int dy = -boxblurRad; dy <= boxblurRad; dy++) {            // Creates the box blur matrix, then sums all of the pixels in this grid.     
+                for (int dx = -boxblurRad; dx <= boxblurRad; dx++) {        // [-1, 0, 1 ] [ -1 ]       example of a 3x3 grid centered around (x, y)
+                    int pixel = img[(y + dy) * width + (x + dx)];           //             [  0 ]       with dy = -1, 0, 1 and dx = -1, 0, 1 .
+                    boxblurBrightness += pixel;                             //             [  1 ]
+                                                                            // No need to worry about rgb channels because of the isGRAYSCALE flag.
+                    if (pixel > brightPixels) { brightPixels = pixel; }     
+                    if (pixel < darkPixels) { darkPixels = pixel; }
+                }                                                           
             }
+            
+            // the size of the box blur window, for averaging.
+            int windowSize = (boxblurRad * 2 + 1) * (boxblurRad * 2 + 1); 
+            double boxblurAvg = (double)boxblurBrightness / (double)windowSize;
+
+            // contrast score of the box blur, higher is better.
+            int contrastScore = brightPixels - darkPixels;
+            
+            // check the contrast dif between the boxblur and global average.
+            double contrastDiff = boxblurAvg - globalBrightnessAverage;
+            if (contrastDiff < 0) { contrastDiff = 0; }
 
             // score penalty for how far the nxn box from the center of the image.
-            int distance = abs(x - width_middle) + abs(y - height_middle);
-            int currentScore = boxblurBrightness - distance;
+            double distance = abs(x - width_middle) + abs(y - height_middle);
+            double currentScore = (contrastDiff * (double)contrastScore) - (distance*10.0);
 
             if (currentScore > ImageScore) {
                 ImageScore = currentScore;
+                realcontrastScore = contrastScore;
             }
         }
     }
     stbi_image_free(img); // free the image memory.
 
+    // BRO THE ALGORITHM IS NOW O(N^5)
+    // TODO: OPTIMIZE; clean up too cus this looks ugly.
+    
     char new_filename[256]; // temp
-    printf("[OUTPUT] Image Score: %d\n", ImageScore);
+    printf("[OUTPUT] Image Score: %.2f | Contrast: %.2f\n", ImageScore, realcontrastScore);
 
     // TODO: RENAME THE FILE INTO THE SCORE.
 }
