@@ -9,9 +9,9 @@
 int process_image(const char* file) {
     // setup parameters
     int isGRAYSCALE = 1;
-    int minWidth = 128, minHeight = 128;
+    int minWidth = 1024, minHeight = 1024;
     int boxblurRad = 12; // radius of the box blur, 1 is a 3x3 box, 2 is a 5x5 box, and so on.
-                         // v something I figured out, the boxblur radius acts like a precision modifier. Higher, but takes more time. 
+                         // v something I figured out, the boxblur radius acts like a precision modifier. Higher, and it takes more time. 
 
     // image pointers
     int width, height, channels;
@@ -28,7 +28,7 @@ int process_image(const char* file) {
     double areaRatio = (double)(width * height) / (double)(minWidth * minHeight);
 
     // sanity check
-    if (img == NULL || width <= minWidth || height <= minHeight) {
+    if (img == NULL || width <= minWidth-1 || height <= minHeight-1) { // fixed the bug where it won't process the score even if the image is 1024x1024.
         printf("[FAILURE] Image Load Fail.\n");
         return;
     }
@@ -46,7 +46,7 @@ int process_image(const char* file) {
 
     // the brightest nxn pixel in the image.
     double ImageScore = -67;
-    double realcontrastScore = -67;
+    double ContrastScore = -67;
 
     // get global image average.
     double globalBrightness = 0;
@@ -74,21 +74,21 @@ int process_image(const char* file) {
             }
             
             // contrast score of the box blur, higher is better.
-            double contrastScore = brightPixels - darkPixels;
+            double currentContrastScore = brightPixels - darkPixels;
 
             // the size of the box blur window, for averaging.
             int windowSize = (boxblurRad * 2 + 1) * (boxblurRad * 2 + 1); 
             double boxblurAvg = (double)boxblurBrightness / (double)windowSize;
             // check the contrast dif between the boxblur and global average.
-            double contrastDiff = fabs(boxblurAvg - globalBrightnessAverage);
+            double contrastAverageDiff = fabs(boxblurAvg - globalBrightnessAverage);
             
             // score penalty for how far the nxn box from the center of the image.
             double distance = abs(x - width_middle) + abs(y - height_middle);
-            double currentScore = (contrastDiff * (double)contrastScore) - (distance*20.0); // arbitrary 20.0 MFW
+            double currentScore = (contrastAverageDiff * (double)currentContrastScore) - (distance*areaRatio);
 
             if (currentScore > ImageScore) {
                 ImageScore = currentScore;
-                realcontrastScore = contrastScore;
+                ContrastScore = currentContrastScore;
             }
         }
     }
@@ -98,7 +98,7 @@ int process_image(const char* file) {
     // TODO: OPTIMIZE; clean up too cus this looks ugly.
 
     char new_filename[256]; // temp
-    printf("[OUTPUT] Image Score: %.2f | Contrast: %.2f\n", ImageScore, realcontrastScore);
+    printf("[OUTPUT] Image Score: %.2f | Contrast: %.2f | Area Ratio: %.2f\n", ImageScore, ContrastScore, areaRatio);
 
     // TODO: RENAME THE FILE INTO THE SCORE.
 }
