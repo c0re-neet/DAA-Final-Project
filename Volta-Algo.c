@@ -8,41 +8,38 @@
 #include "./headers/stb_image.h"
 
 // scores an image with an arbitrary number. Higher is better. It uses a box blur algorithm as the main method and integral image technique for mapping (optimization).
-int process_image(const char* file) {
+void process_image(const char* file) {
     // setup parameters
     int isGRAYSCALE = 1;
     int minWidth = 1024, minHeight = 1024;
     int boxblurRad = 24; // radius of the box blur, 1 is a 3x3 box, 2 is a 5x5 box, and so on.
-                         // v something I figured out, the boxblur radius acts like a precision modifier. Higher, and it takes more time. 
 
     // image pointers
     int width, height, channels;
-    // i accidentally putted this AFTER the margin calculations. woops
     unsigned char* img = stbi_load(file, &width, &height, &channels, isGRAYSCALE);
-    
+
+    // sanity check
+    if (img == NULL) { 
+        printf("[FAILURE] Image Load Fail: %s\n", file);
+        return;
+    }
+
+    if (width <= minWidth - 1 || height <= minHeight - 1) {
+        printf("[FAILURE] Image too small. Minimum size is %d x %d.\n", minWidth, minHeight);
+        stbi_image_free(img); // memory leak fix for early exit.
+        return;
+    }
+
     // how large the pinhole in the middle of the image. 0.5 is 50% and so on, so forth.
-    float PinHoleSize = 0.5;
-    // -- margin size base, creates a box vignette around the image, ignoring not inside the center.
-    int x_margin = (width * (1.0 - PinHoleSize)) / 2;
-    int y_margin = (height * (1.0 - PinHoleSize)) / 2;
-    // --
+    float PinHoleSize = 0.5f;
+    // margin size base, creates a box vignette around the image
+    int x_margin = (int)(width * (1.0f - PinHoleSize)) / 2;
+    int y_margin = (int)(height * (1.0f - PinHoleSize)) / 2;
 
     // the size of the box blur window, for averaging.
     int windowSize = (boxblurRad * 2 + 1) * (boxblurRad * 2 + 1);
 
-    double areaRatio = (double)(width * height) / (double)(minWidth * minHeight);
-
-    // sanity check
-    if (img == NULL) { // fixed the bug where it won't process the score even if the image is 1024x1024.
-        printf("[FAILURE] Image Load Fail.\n");
-        return;
-    }
-
-    if ( width <= minWidth-1 || height <= minHeight-1) {
-        printf("[FAILURE] Image too small. Minimum size is %d x %d.\n", minWidth, minHeight);
-        stbi_image_free(img); // memory leak fix.
-        return;
-    }
+    double areaRatio = ((double)width * (double)height) / ((double)minWidth * (double)minHeight);
 
     // setup base variables
     int totalPixels = width * height;
@@ -54,25 +51,26 @@ int process_image(const char* file) {
     int x_padding = x_margin + boxblurRad;
     int y_limit = height - y_margin - boxblurRad;
     int x_limit = width - x_margin - boxblurRad;
-    float brightnessLimit = 255.0;
+    float brightnessLimit = 255.0f;
 
-    // the brightest nxn pixel in the image.
-    double ImageScore = -67;
-    double ContrastScore = -67;
+    double ImageScore = -67.0;
+    double ContrastScore = -67.0;
 
     // start benchmark timer.
     time_t startTime = time(NULL);
-    // get global image average.
-    double globalBrightness = 0;
-    for (int i = 0; i < totalPixels; i++) {
-        globalBrightness += img[i];
+    double globalBrightness = 0.0;
+    
+    // allocate memory for the summed area table
+    unsigned int* imageMemory = calloc((width + 1) * (height + 1), sizeof(unsigned int));
+    
+    // safety check for RAM availability
+    if (imageMemory == NULL) {
+        printf("[FAILURE] Memory allocation failed for integral image.\n");
+        stbi_image_free(img);
+        return;
     }
-    double globalBrightnessAverage = globalBrightness / (double)totalPixels;
 
-    unsigned int* imageMemory = calloc((width + 1) * (height + 1), sizeof(unsigned int)); // memory for the summed area table, to optimize the box blur calculation.
-
-    // global brightness average for loop. Also builds our imageMemory because might aswell cause it already goes through each pixel in the image.
-    // removing the need to go through the image again inside the main forloop.
+    // Builds our imageMemory AND calculates global brightness simultaneously
     for (int y = 1; y <= height; y++) {
         int rowBrightness = 0;
         for (int x = 1; x <= width; x++) {
@@ -80,13 +78,15 @@ int process_image(const char* file) {
             rowBrightness += pixel;
             globalBrightness += pixel;
             
-            // uses integral image technique for the box blur's aura farm, by precomputing the sum of all pixels instead of doing it inside the main box blur loop. Each pixel.
-            // -> https://www.slideshare.net/slideshow/integral-image-summed-area-table/72942067
+            // uses integral image technique for the box blur's aura farm
             imageMemory[y * (width + 1) + x] = imageMemory[(y - 1) * (width + 1) + x] + rowBrightness;
         }
     }
 
-    // main algorithm loop. Uses Box Blur and Integral Image mapping to find the brightness (mostly this) and contrast, then scores the image based on the contrast and distance from the center.
+    // Calculate average AFTER the loop completes
+    double globalBrightnessAverage = globalBrightness / (double)totalPixels;
+
+    // main algorithm loop. 
     for (int y = y_padding; y < y_limit; y++) {
         for (int x = x_padding; x < x_limit; x++) {
 
@@ -110,7 +110,7 @@ int process_image(const char* file) {
             
             // score penalty for how far the nxn box from the center of the image.
             double distance = abs(x - width_middle) + abs(y - height_middle);
-            double currentScore = (contrastAverageDiff * brightnessLimit) - (distance*areaRatio);
+            double currentScore = (contrastAverageDiff * brightnessLimit) - (distance * areaRatio);
 
             if (currentScore > ImageScore) {
                 ImageScore = currentScore;
@@ -118,16 +118,16 @@ int process_image(const char* file) {
             }
         }
     }
-    stbi_image_free(img); // free the image memory.
+
+    // free the image AND the integral image memory.
+    stbi_image_free(img); 
+    free(imageMemory);
 
     // end benchmark timer.
     time_t endTime = time(NULL);
     double timeTaken = difftime(endTime, startTime);
 
-    char new_filename[256]; // temp
     printf("[OUTPUT] Image Score: %.2f | Contrast: %.2f | Area Ratio: %.2f | Time: %.2f seconds\n", ImageScore, ContrastScore, areaRatio, timeTaken);
-
-    // TODO: RENAME THE FILE INTO THE SCORE.
 }
 
 int main() {
